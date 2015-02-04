@@ -21,13 +21,13 @@ from node.backuptool import BackupTool, Backup, BackupJSONEncoder
 
 
 class ProtocolHandler(object):
-    def __init__(self, transport, market_application, handler, db,
+    def __init__(self, transport, market_application, handler, db_connection,
                  loop_instance):
         self.market_application = market_application
         self.market = self.market_application.market
         self.transport = transport
         self.handler = handler
-        self.db = db
+        self.db_connection = db_connection
 
         self.transport.set_websocket_handler(self)
 
@@ -233,10 +233,10 @@ class ProtocolHandler(object):
     def client_add_guid(self, socket_handler, msg):
         self.log.info('Adding node by guid %s', msg)
 
-        def cb(msg):
+        def get_peers_callback(msg):
             self.get_peers()
 
-        self.transport.dht.iterativeFindNode(msg.get('guid'), cb)
+        self.transport.dht.iterative_find_node(msg.get('guid'), get_peers_callback)
 
     def client_remove_trusted_notary(self, socket_handler, msg):
         self.log.info('Removing trusted notary %s', msg)
@@ -253,11 +253,11 @@ class ProtocolHandler(object):
 
     def client_clear_dht_data(self, socket_handler, msg):
         self.log.debug('Clearing DHT Data')
-        self.db.deleteEntries("datastore")
+        self.db_connection.delete_entries("datastore")
 
     def client_clear_peers_data(self, socket_handler, msg):
         self.log.debug('Clearing Peers Data')
-        self.db.deleteEntries("peers")
+        self.db_connection.delete_entries("peers")
 
     # Requests coming from the client
     def client_connect(self, socket_handler, msg):
@@ -277,7 +277,7 @@ class ProtocolHandler(object):
 
     def client_check_order_count(self, socket_handler, msg):
         self.log.debug('Checking order count')
-        orders = self.db.selectEntries(
+        orders = self.db_connection.select_entries(
             "orders",
             {
                 "market_id": self.transport.market_id,
@@ -757,7 +757,7 @@ class ProtocolHandler(object):
     def client_search(self, socket_handler, msg):
 
         self.log.info("[Search] %s", msg)
-        self.transport.dht.iterativeFindValue(
+        self.transport.dht.iterative_find_value(
             msg['key'], callback=self.on_node_search_value
         )
 
@@ -852,7 +852,7 @@ class ProtocolHandler(object):
 
             # Go get listing metadata and then send it to the GUI
             for contract in contracts:
-                self.transport.dht.iterativeFindValue(
+                self.transport.dht.iterative_find_value(
                     contract,
                     callback=lambda msg, key=contract: (
                         self.on_node_search_value(msg, key)
@@ -873,7 +873,7 @@ class ProtocolHandler(object):
                     self.log.debug('Results contract %s', contract)
                     key = contract.get('key', contract)
 
-                    self.transport.dht.iterativeFindValue(
+                    self.transport.dht.iterative_find_value(
                         key,
                         callback=lambda msg, key=key: (
                             self.on_global_search_value(msg, key)
@@ -958,8 +958,8 @@ class ProtocolHandler(object):
                     if contract_guid == self.transport.guid:
                         nickname = self.transport.nickname
                     else:
-                        routing_table = self.transport.dht.routingTable
-                        peer = routing_table.getContact(contract_guid)
+                        routing_table = self.transport.dht.routing_table
+                        peer = routing_table.get_contact(contract_guid)
                         nickname = peer.nickname if peer is not None else ""
 
                     self.send_to_client(None, {
@@ -1059,7 +1059,7 @@ class ProtocolHandler(object):
     def get_peers(self):
         peers = []
 
-        for peer in self.transport.dht.activePeers:
+        for peer in self.transport.dht.active_peers:
 
             if hasattr(peer, 'address'):
                 peer_item = {'uri': peer.address}
@@ -1086,7 +1086,7 @@ class WebSocketHandler(tornado.websocket.WebSocketHandler):
     # Protects listeners
     listen_lock = threading.Lock()
 
-    def initialize(self, transport, market_application, db):
+    def initialize(self, transport, market_application, db_connection):
         # pylint: disable=arguments-differ
         # FIXME: Arguments shouldn't differ.
         self.loop = tornado.ioloop.IOLoop.instance()
@@ -1098,7 +1098,7 @@ class WebSocketHandler(tornado.websocket.WebSocketHandler):
             transport,
             self.market_application,
             self,
-            db,
+            db_connection,
             self.loop
         )
         self.transport = transport

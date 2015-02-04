@@ -16,7 +16,7 @@ import zmq
 from zmq.eventloop import ioloop
 from zmq.eventloop.ioloop import PeriodicCallback
 
-from node import connection, network_util
+from node import connection, network_util, trust
 from node.dht import DHT
 
 
@@ -71,7 +71,7 @@ class TransportLayer(object):
 
 class CryptoTransportLayer(TransportLayer):
 
-    def __init__(self, ob_ctx, db):
+    def __init__(self, ob_ctx, db_connection):
 
         self.ob_ctx = ob_ctx
 
@@ -81,7 +81,7 @@ class CryptoTransportLayer(TransportLayer):
         requests_log = logging.getLogger("requests")
         requests_log.setLevel(logging.WARNING)
 
-        self.db = db
+        self.db_connection = db_connection
 
         self.bitmessage_api = None
         if (ob_ctx.bm_user, ob_ctx.bm_pass, ob_ctx.bm_port) != (None, None, -1):
@@ -104,7 +104,7 @@ class CryptoTransportLayer(TransportLayer):
 
         self._setup_settings()
         ob_ctx.market_id = self.market_id
-        self.dht = DHT(self, self.market_id, self.settings, self.db)
+        self.dht = DHT(self, self.market_id, self.settings, self.db_connection)
         TransportLayer.__init__(self, ob_ctx, self.guid, self.nickname)
         self.start_listener()
 
@@ -157,7 +157,7 @@ class CryptoTransportLayer(TransportLayer):
             if self.listener is not None:
                 self.listener.set_ip_address(new_ip)
 
-            self.dht._iterativeFind(self.guid, [], 'findNode')
+            self.dht.iterative_find(self.guid, [], 'findNode')
 
     def save_peer_to_db(self, peer_tuple):
         uri = peer_tuple[0]
@@ -166,9 +166,9 @@ class CryptoTransportLayer(TransportLayer):
         nickname = peer_tuple[3]
 
         # Update query
-        self.db.deleteEntries("peers", {"uri": uri, "guid": guid}, "OR")
+        self.db_connection.delete_entries("peers", {"uri": uri, "guid": guid}, "OR")
         if guid is not None:
-            self.db.insertEntry("peers", {
+            self.db_connection.insert_entry("peers", {
                 "uri": uri,
                 "pubkey": pubkey,
                 "guid": guid,
@@ -215,7 +215,7 @@ class CryptoTransportLayer(TransportLayer):
         return True
 
     def on_store(self, msg):
-        self.dht._on_storeValue(msg)
+        self.dht._on_store_value(msg)
 
     def validate_on_findNode(self, msg):
         self.log.debugv('Validating find node message.')
@@ -228,19 +228,19 @@ class CryptoTransportLayer(TransportLayer):
         self.log.debugv('Validating find node response message.')
         return True
 
-    def on_findNodeResponse(self, msg):
-        self.dht.on_findNodeResponse(msg)
+    def on_findNodeResponse(self, msg):  # pylint: disable=invalid-name
+        self.dht.on_find_node_response(msg)
 
     def _setup_settings(self):
         try:
-            self.settings = self.db.selectEntries("settings", {"market_id": self.market_id})
-        except (OperationalError, DatabaseError) as e:
-            print e
-            raise SystemExit("database file %s corrupt or empty - cannot continue" % self.db.db_path)
+            self.settings = self.db_connection.select_entries("settings", {"market_id": self.market_id})
+        except (OperationalError, DatabaseError) as err:
+            print err
+            raise SystemExit("database file %s corrupt or empty - cannot continue" % self.db_connection.db_path)
 
         if len(self.settings) == 0:
             self.settings = {"market_id": self.market_id, "welcome": "enable"}
-            self.db.insertEntry("settings", self.settings)
+            self.db_connection.insert_entry("settings", self.settings)
         else:
             self.settings = self.settings[0]
 
@@ -261,7 +261,7 @@ class CryptoTransportLayer(TransportLayer):
 
                 pubkey_text = gpg.export_keys(key.fingerprint)
                 newsettings = {"PGPPubKey": pubkey_text, "PGPPubkeyFingerprint": key.fingerprint}
-                self.db.updateEntries("settings", newsettings, {"market_id": self.market_id})
+                self.db_connection.update_entries("settings", newsettings, {"market_id": self.market_id})
                 self.settings.update(newsettings)
 
                 self.log.info('PGP keypair generated.')
@@ -274,10 +274,11 @@ class CryptoTransportLayer(TransportLayer):
 
         if not self.settings.get('nickname'):
             newsettings = {'nickname': 'Default'}
-            self.db.updateEntries('settings', newsettings, {"market_id": self.market_id})
+            self.db_connection.update_entries('settings', newsettings, {"market_id": self.market_id})
             self.settings.update(newsettings)
 
         self.nickname = self.settings.get('nickname', '')
+        self.namecoin_id = self.settings.get('namecoin_id', '')
         self.secret = self.settings.get('secret', '')
         self.pubkey = self.settings.get('pubkey', '')
         self.privkey = self.settings.get('privkey')
@@ -321,7 +322,7 @@ class CryptoTransportLayer(TransportLayer):
             "guid": self.guid,
             "sin": self.sin
         }
-        self.db.updateEntries("settings", newsettings, {"market_id": self.market_id})
+        self.db_connection.update_entries("settings", newsettings, {"market_id": self.market_id})
         self.settings.update(newsettings)
 
     def _generate_new_bitmessage_address(self):
@@ -333,7 +334,7 @@ class CryptoTransportLayer(TransportLayer):
             1.1111
         )
         newsettings = {"bitmessage": self.bitmessage}
-        self.db.updateEntries("settings", newsettings, {"market_id": self.market_id})
+        self.db_connection.update_entries("settings", newsettings, {"market_id": self.market_id})
         self.settings.update(newsettings)
 
     def join_network(self, seeds=None, callback=None):
@@ -361,7 +362,7 @@ class CryptoTransportLayer(TransportLayer):
             # since this will be repeated in most cases less than 10 times
             def join_callback():
                 # If we are not connected to any node, reschedule a check
-                if not self.dht.activePeers:
+                if not self.dht.active_peers:
                     ioloop.IOLoop.instance().call_later(1, join_callback)
                 else:
                     self.search_for_my_node()
@@ -371,12 +372,12 @@ class CryptoTransportLayer(TransportLayer):
             callback('Joined')
 
     def get_past_peers(self):
-        result = self.db.selectEntries("peers", {"market_id": self.market_id})
+        result = self.db_connection.select_entries("peers", {"market_id": self.market_id})
         return [peer['uri'] for peer in result]
 
     def search_for_my_node(self):
         self.log.info('Searching for myself')
-        self.dht._iterativeFind(self.guid, self.dht.knownNodes, 'findNode')
+        self.dht.iterative_find(self.guid, self.dht.known_nodes, 'findNode')
 
     def get_crypto_peer(self, guid=None, uri=None, pubkey=None, nickname=None):
         if guid == self.guid:
@@ -413,11 +414,11 @@ class CryptoTransportLayer(TransportLayer):
         # Directed message
         if send_to is not None:
 
-            peer = self.dht.routingTable.getContact(send_to)
+            peer = self.dht.routing_table.get_contact(send_to)
             if peer is None:
-                for activePeer in self.dht.activePeers:
-                    if activePeer.guid == send_to:
-                        peer = activePeer
+                for active_peer in self.dht.active_peers:
+                    if active_peer.guid == send_to:
+                        peer = active_peer
                         break
 
             if peer:
@@ -441,12 +442,12 @@ class CryptoTransportLayer(TransportLayer):
         else:
             # FindKey and then send
 
-            for peer in self.dht.activePeers:
+            for peer in self.dht.active_peers:
                 try:
-                    routing_peer = self.dht.routingTable.getContact(peer.guid)
+                    routing_peer = self.dht.routing_table.get_contact(peer.guid)
 
                     if routing_peer is None:
-                        self.dht.routingTable.addContact(peer)
+                        self.dht.routing_table.add_contact(peer)
                         routing_peer = peer
 
                     data['senderGUID'] = self.guid
@@ -471,11 +472,16 @@ class CryptoTransportLayer(TransportLayer):
         guid = msg.get('senderGUID')
         nickname = msg.get('senderNick', '')[:120]
         msg_type = msg.get('type')
+        namecoin = msg.get('senderNamecoin')
 
         # Checking for malformed URIs
         if not network_util.is_valid_uri(uri):
             self.log.error('Malformed URI: %s', uri)
             return
+
+        # Validate the claimed namecoin in DNSChain
+        if not trust.is_valid_namecoin(namecoin, guid):
+            msg['senderNamecoin'] = ''
 
         self.log.info('Received message type "%s" from "%s" %s %s',
                       msg_type, nickname, uri, guid)
@@ -487,9 +493,9 @@ class CryptoTransportLayer(TransportLayer):
         """
         Store or republish data.
 
-        Refer to the dht module (iterativeStore()) for further details.
+        Refer to the dht module (iterative_store()) for further details.
         """
-        self.dht.iterativeStore(*args, **kwargs)
+        self.dht.iterative_store(*args, **kwargs)
 
     def shutdown(self):
         print "CryptoTransportLayer.shutdown()!"

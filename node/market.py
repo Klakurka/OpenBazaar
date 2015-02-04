@@ -11,6 +11,7 @@ from PIL import Image, ImageOps
 import random
 from StringIO import StringIO
 import traceback
+import re
 
 from bitcoin.main import privkey_to_pubkey
 import tornado
@@ -25,7 +26,7 @@ from node.protocol import proto_page, query_page
 class Market(object):
     """This class manages the active market for the application"""
 
-    def __init__(self, transport, db):
+    def __init__(self, transport, db_connection):
         """Class constructor defines the basic attributes and callbacks
 
         Attributes:
@@ -34,7 +35,7 @@ class Market(object):
           dht (DHT): For storage across the network (distributed hash table).
           market_id (int): Indicates which local market we're working with.
           peers: Active peers/nodes on the P2P network
-          db: Database ORM handler
+          db_connection: Database ORM handler
           orders: Orders for goods from database
           pages:
           mypage:
@@ -49,9 +50,9 @@ class Market(object):
         self.transport = transport
         self.dht = transport.dht
         self.market_id = transport.market_id
-        self.peers = self.dht.getActivePeers()
-        self.db = db
-        self.orders = Orders(transport, self.market_id, db)
+        self.peers = self.dht.get_active_peers()
+        self.db_connection = db_connection
+        self.orders = Orders(transport, self.market_id, db_connection)
         self.pages = {}
         self.mypage = None
         self.signature = None
@@ -84,14 +85,14 @@ class Market(object):
 
         # Periodically refresh buckets
         loop = tornado.ioloop.IOLoop.instance()
-        refreshCB = tornado.ioloop.PeriodicCallback(self.dht._refreshNode,
-                                                    constants.REFRESH_TIMEOUT,
-                                                    io_loop=loop)
-        refreshCB.start()
+        refresh_cb = tornado.ioloop.PeriodicCallback(self.dht._refresh_node,
+                                                     constants.REFRESH_TIMEOUT,
+                                                     io_loop=loop)
+        refresh_cb.start()
 
     def disable_welcome_screen(self):
         """This just flags the welcome screen to not show on startup"""
-        self.db.updateEntries(
+        self.db_connection.update_entries(
             "settings",
             {"welcome": "disable"},
             {'market_id': self.transport.market_id}
@@ -155,7 +156,7 @@ class Market(object):
 
     def save_contract_to_db(self, contract_id, body, signed_body, key):
         """Insert contract to database"""
-        self.db.insertEntry(
+        self.db_connection.insert_entry(
             "contracts",
             {
                 "id": contract_id,
@@ -284,7 +285,7 @@ class Market(object):
         if 'btc_pubkey' in self.settings:
             del self.settings['btc_pubkey']
 
-        self.db.updateEntries(
+        self.db_connection.update_entries(
             "settings",
             self.settings,
             {'market_id': self.transport.market_id}
@@ -302,7 +303,7 @@ class Market(object):
 
         self.settings['notaries'] = json.dumps(notaries)
 
-        self.db.updateEntries(
+        self.db_connection.update_entries(
             "settings",
             self.settings,
             {'market_id': self.transport.market_id}
@@ -310,7 +311,7 @@ class Market(object):
 
     def republish_contracts(self):
         """Update information about contracts in the network"""
-        listings = self.db.selectEntries("contracts", {"deleted": 0})
+        listings = self.db_connection.select_entries("contracts", {"deleted": 0})
         for listing in listings:
             self.transport.store(
                 listing['key'],
@@ -335,11 +336,11 @@ class Market(object):
 
         # Untested code
         if online_only:
-            for n in settings['notaries']:
-                peer = self.dht.routingTable.getContact(n.guid)
+            for notary in settings['notaries']:
+                peer = self.dht.routing_table.get_contact(notary.guid)
                 if peer is not None:
                     peer.start_handshake()
-                    notaries.append(n)
+                    notaries.append(notary)
             return notaries
         # End of untested code
 
@@ -353,7 +354,7 @@ class Market(object):
     def republish_listing(self, msg):
         """Update information about products in the network"""
         listing_id = msg.get('productID')
-        listing = self.db.selectEntries("products", {"id": listing_id})
+        listing = self.db_connection.select_entries("products", {"id": listing_id})
 
         if listing:
             listing = listing[0]
@@ -385,7 +386,7 @@ class Market(object):
         contract_index_key = hashvalue.hexdigest()
 
         # Calculate index of contracts
-        contract_ids = self.db.selectEntries(
+        contract_ids = self.db_connection.select_entries(
             "contracts",
             {"market_id": self.transport.market_id, "deleted": 0}
         )
@@ -423,7 +424,7 @@ class Market(object):
         # Remove from DHT keyword indices
         self.remove_from_keyword_indexes(msg['contract_id'])
 
-        self.db.updateEntries(
+        self.db_connection.update_entries(
             "contracts",
             {"deleted": 1},
             {"id": msg["contract_id"]}
@@ -433,7 +434,7 @@ class Market(object):
 
     def remove_from_keyword_indexes(self, contract_id):
         """Remove from DHT keyword indices"""
-        contract = self.db.selectEntries("contracts", {"id": contract_id})[0]
+        contract = self.db_connection.select_entries("contracts", {"id": contract_id})[0]
         contract_key = contract['key']
 
         contract = json.loads(contract['contract_body'])
@@ -505,7 +506,7 @@ class Market(object):
         """Select contracts for market from database"""
         self.log.info(
             "Getting contracts for market: %s", self.transport.market_id)
-        contracts = self.db.selectEntries(
+        contracts = self.db_connection.select_entries(
             "contracts",
             {"market_id": self.transport.market_id, "deleted": 0},
             limit=10,
@@ -564,12 +565,12 @@ class Market(object):
         return {
             "contracts": my_contracts, "page": page,
             "total_contracts": len(
-                self.db.selectEntries("contracts", {"deleted": "0"}))}
+                self.db_connection.select_entries("contracts", {"deleted": "0"}))}
 
     def undo_remove_contract(self, contract_id):
         """Restore removed contract"""
         self.log.info("Undo remove contract: %s", contract_id)
-        self.db.updateEntries(
+        self.db_connection.update_entries(
             "contracts",
             {"deleted": "0"},
             {"market_id": self.transport.market_id.replace("'", "''"), "id": contract_id}
@@ -594,8 +595,13 @@ class Market(object):
                 data = json.dumps({'notary_index_remove': self.transport.guid})
                 self.transport.store(key, data, self.transport.guid)
 
-        # Update nickname
+        # Validate that the namecoin id received is well formed
+        if not re.match(r'^[a-z0-9\-]{1,39}$', msg['namecoin_id']):
+            msg['namecoin_id'] = ''
+
+        # Update nickname and namecoin id
         self.transport.nickname = msg['nickname']
+        self.transport.namecoin_id = msg['namecoin_id']
 
         if 'burnAmount' in msg:
             del msg['burnAmount']
@@ -603,7 +609,7 @@ class Market(object):
             del msg['burnAddr']
 
         # Update local settings
-        self.db.updateEntries(
+        self.db_connection.update_entries(
             "settings",
             msg,
             {'market_id': self.transport.market_id}
@@ -614,7 +620,7 @@ class Market(object):
 
         self.log.info(
             "Getting settings info for Market %s", self.transport.market_id)
-        settings = self.db.getOrCreate(
+        settings = self.db_connection.get_or_create(
             "settings",
             {"market_id": self.transport.market_id})
 

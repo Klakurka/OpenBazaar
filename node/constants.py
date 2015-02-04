@@ -25,7 +25,7 @@ RPC_TIMEOUT = 0.1
 # [seconds]
 ITERATIVE_LOOKUP_DELAY = RPC_TIMEOUT / 2
 
-# If a k-bucket has not been used for this amount of time, refresh it.
+# If a KBucket has not been used for this amount of time, refresh it.
 # [seconds]
 REFRESH_TIMEOUT = 60 * 60 * 1000  # 1 hour
 
@@ -56,3 +56,7 @@ DB_PATH = "db/ob.db"
 VERSION = "0.3.1"
 
 SATOSHIS_IN_BITCOIN = 100000000
+
+# The IP of the default DNSChain Server used to validate namecoin addresses
+DNSCHAIN_SERVER_IP = "192.184.93.146"
+

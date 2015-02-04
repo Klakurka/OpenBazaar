@@ -49,7 +49,7 @@ function brewUpgrade {
 
 function installMac {
   # print commands (useful for debugging)
-  # set -x  #disabled because the echos and stdout are verbose enough to see progress
+  # set -x # echoes the commands executed
 
   # install brew if it is not installed, otherwise upgrade it
   if ! command_exists brew ; then
@@ -57,10 +57,13 @@ function installMac {
     ruby -e "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install)"
   else
     echo "updating, upgrading, checking brew..."
+    ORIGINAL_CPPFLAGS=$CPPFLAGS
+    export CPPFLAGS=
     brew update
     brewDoctor
     brewUpgrade
     brew prune
+    export CPPFLAGS=$ORIGINAL_CPPFLAGS
   fi
 
   # Use brew's python 2.7, even if user has a system python. The brew version comes with pip and setuptools.
@@ -102,18 +105,34 @@ function installMac {
 }
 
 function doneMessage {
-  echo ""
-  echo "OpenBazaar configuration finished."
-  echo "type './openbazaar $1start; tail -F logs/production.log' to start your OpenBazaar servent instance and monitor logging output."
+  VERSION_FROM_CHANGELOG="$(head -1 changelog | awk '/openbazaar \(.*\..*\..*\)/ { print $2 }')"
   echo ""
   echo ""
   echo ""
+  echo '   ____                     ____                            '
+  echo '  / __ \                   |  _ \                           '
+  echo ' | |  | |_ __   ___ _ __   | |_) | __ _ ______ _  __ _ _ __ '
+  echo ' | |  | |  _ \ / _ \  _ \  |  _ < / _` |_  / _` |/ _` |  __|'
+  echo ' | |__| | |_) |  __/ | | | | |_) | (_| |/ / (_| | (_| | |   '
+  echo '  \____/| .__/ \___|_| |_| |____/ \__,_/___\__,_|\__,_|_|   '
+  echo '        | |                                                 '
+  echo '        |_|                                                 '                                                                                                   ##'
   echo ""
+  echo "                                             Release $VERSION_FROM_CHANGELOG"
+  echo ""
+  echo ""
+  echo "OpenBazaar configuration finished!"
+  echo "Run './openbazaar $1start; tail -F logs/production.log' to start OpenBazaar and output logs."
+  echo ""
+  echo ""
+  echo ""
+
 }
 
+
 function installUbuntu {
-  # print commands
-  set -x
+  # print commands (useful for debugging)
+  # set -x # echoes the commands executed
 
   sudo apt-get -q update || echo 'apt-get update failed. Continuing...'
   sudo apt-get -y install python-pip build-essential python-zmq rng-tools \
@@ -130,8 +149,8 @@ function installUbuntu {
 }
 
 function installArch {
-  #print commands
-  set -x
+  # print commands (useful for debugging)
+  # set -x # echoes the commands executed
 
   echo "Some packages and dependencies may fail to install if your package list is out of date."
   echo "Would you like to upgrade your system now? "
@@ -139,7 +158,7 @@ function installArch {
     sudo pacman -Syu
   else
     echo "Continuing."
-  fi 
+  fi
   # sudo pacman -S --needed base-devel
   # Can conflict with multilib packages. Uncomment this line if you don't already have base-devel installed
   sudo pacman -S --needed python2 python2-pip python2-virtualenv python2-pyzmq rng-tools libjpeg sqlite3 openssl
@@ -197,8 +216,8 @@ function installRaspbian {
 }
 
 function installPortage {
-  # print commands
-  set -x
+  # print commands (useful for debugging)
+  # set -x # echoes the commands executed
 
   sudo emerge -an dev-lang/python:2.7 dev-python/pip pyzmq rng-tools gcc jpeg sqlite3 openssl dev-python/virtualenv
   # FIXME: on gentoo install as user, because otherwise
@@ -209,8 +228,8 @@ function installPortage {
 }
 
 function installFedora {
-  # print commands
-  set -x
+  # print commands (useful for debugging)
+  # set -x # echoes the commands executed
 
   sudo yum install -y http://linux.ringingliberty.com/bitcoin/f18/x86_64/bitcoin-release-1-4.noarch.rpm
 
@@ -229,7 +248,7 @@ function installFedora {
 }
 
 function installSlack {
-  set -x
+  # set -x # echoes the commands executed
 
   sudo /usr/sbin/slackpkg update
   if ! command_exists python; then

@@ -110,19 +110,7 @@ class CryptoPeerConnection(GUIDMixin, PeerConnection):
             self.nickname = msg['senderNick']
 
             # Add this peer to active peers list
-            for idx, peer in enumerate(self.transport.dht.activePeers):
-                if peer.guid == self.guid or peer.address == self.address:
-                    self.transport.dht.activePeers[idx] = self
-                    self.transport.dht.add_peer(
-                        self.address,
-                        self.pub,
-                        self.guid,
-                        self.nickname
-                    )
-                    return
-
-            self.transport.dht.activePeers.append(self)
-            self.transport.dht.routingTable.addContact(self)
+            self.transport.dht.add_as_active_peer(self)
 
             if initial_handshake_cb is not None:
                 initial_handshake_cb()
@@ -134,6 +122,7 @@ class CryptoPeerConnection(GUIDMixin, PeerConnection):
                 'uri': self.transport.uri,
                 'senderGUID': self.transport.guid,
                 'senderNick': self.transport.nickname,
+                'senderNamecoin': self.transport.namecoin_id,
                 'v': constants.VERSION
             }),
             cb
@@ -174,6 +163,7 @@ class CryptoPeerConnection(GUIDMixin, PeerConnection):
         data['uri'] = self.transport.uri
         data['pubkey'] = self.transport.pubkey
         data['senderNick'] = self.transport.nickname
+        data['senderNamecoin'] = self.transport.namecoin_id
         data['v'] = constants.VERSION
 
         # Sign cleartext data
